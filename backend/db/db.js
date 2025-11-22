@@ -21,6 +21,17 @@ await db.exec(`
     )
 `);
 
+await db.exec(`
+    CREATE TABLE IF NOT EXISTS posts (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    userId INTEGER,
+    text TEXT,
+    image TEXT,
+    createdAt DATETIME DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (userId) REFERENCES users(id)
+    );
+`);
+
 
 //Make and insert test user (removed later)
 const testEmail = 'test@email.com'

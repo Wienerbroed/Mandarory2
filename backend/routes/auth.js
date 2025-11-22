@@ -2,11 +2,22 @@
 import express from 'express';
 import { db } from '../db/db.js';
 import bcrypt, { hash } from 'bcrypt';
+import jwt from 'jsonwebtoken';
+import nodemailer from 'nodemailer';
 import { verifyAccessToken } from "../middleware/auth.js";
 import { generateAccessToken, generateRefreshToken } from '../utils/jwt.js';
 
 // Setuo router
 const router = express.Router();
+
+// nodemailer setup
+const transporter = nodemailer.createTransport({
+    service: "gmail",
+    auth: {
+        user: process.env.EMAIL_USER,
+        pass: process.env.EMAIL_PASS
+    }
+});
 
 // Login 
 router.post('/login', async (req, res, next) => {
@@ -48,7 +59,8 @@ router.post('/login', async (req, res, next) => {
         res.json({
             success: true,
             accessToken,
-            refreshToken
+            refreshToken,
+            userId: user.id
         });
 
         // general error for no serve connection
@@ -70,8 +82,9 @@ router.post('/signUp', async (req, res, next) => {
         }
 
         // Checking for existing users
-        const mathcingUsers = await db.get('SELECT * FROM users WHERE email = ?', [email]);
-        if(mathcingUsers) {
+        const exists = await db.get('SELECT * FROM users WHERE email = ?', [email]);
+
+        if(exists) {
             return res.status(407).json({success: false, message: 'Email already registered.'});
         }
 
@@ -83,6 +96,7 @@ router.post('/signUp', async (req, res, next) => {
             [email, hashedPassword]
         );
 
+        // sets user ud for login session
         const userId = result.lastID;
 
         const accessToken = generateAccessToken(userId);
@@ -93,10 +107,20 @@ router.post('/signUp', async (req, res, next) => {
             [refreshToken, userId]
         );
 
+        
+        // sends welcome mail 
+        await transporter.sendMail({
+            from: process.env.EMAIL_USER,
+            to: email,
+            subject: "Welcome",
+            text: "Thank you for signing up."
+        });
+
         res.json({
             success: true,
             accessToken,
-            refreshToken
+            refreshToken,
+            userId: userId
         });
 
     } catch (err) {
@@ -105,6 +129,7 @@ router.post('/signUp', async (req, res, next) => {
     }
 });
 
+// refresh token
 router.post("/refresh", async (req, res) => {
     const { refreshToken } = req.body;
 
@@ -130,6 +155,72 @@ router.post("/refresh", async (req, res) => {
 
 router.get("/protected", verifyAccessToken, (req, res) => {
     res.json({ message: "You accessed a protected route!", user: req.user });
+});
+
+// -------------------------------------------------------
+// POSTS CRUD
+// -------------------------------------------------------
+
+router.post("/posts", verifyAccessToken, async (req, res) => {
+    const { text, image } = req.body;
+    const userId = req.user.id;
+
+    await db.run(
+        "INSERT INTO posts (userId, text, image) VALUES (?, ?, ?)",
+        [userId, text, image]
+    );
+
+    res.json({ success: true });
+});
+
+// GET ALL POSTS
+router.get("/posts", async (req, res) => {
+    const posts = await db.all(`
+        SELECT posts.*, users.email 
+        FROM posts 
+        JOIN users ON posts.userId = users.id
+        ORDER BY createdAt DESC
+    `);
+
+    res.json(posts);
+});
+
+// UPDATE POST
+router.put("/posts/:id", verifyAccessToken, async (req, res) => {
+    const { id } = req.params;
+    const { text, image } = req.body;
+
+    const post = await db.get("SELECT * FROM posts WHERE id = ?", [id]);
+
+    if (!post)
+        return res.status(404).json({ error: "Post not found" });
+
+    if (post.userId !== req.user.id)
+        return res.status(403).json({ error: "Not allowed" });
+
+    await db.run(
+        "UPDATE posts SET text = ?, image = ? WHERE id = ?",
+        [text, image, id]
+    );
+
+    res.json({ success: true });
+});
+
+// DELETE POST
+router.delete("/posts/:id", verifyAccessToken, async (req, res) => {
+    const { id } = req.params;
+
+    const post = await db.get("SELECT * FROM posts WHERE id = ?", [id]);
+
+    if (!post)
+        return res.status(404).json({ error: "Not found" });
+
+    if (post.userId !== req.user.id)
+        return res.status(403).json({ error: "Not allowed" });
+
+    await db.run("DELETE FROM posts WHERE id = ?", [id]);
+
+    res.json({ success: true });
 });
 
 //exports
